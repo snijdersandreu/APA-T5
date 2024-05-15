@@ -1,6 +1,8 @@
 # Sonido estéreo y ficheros WAVE
 
 ## Nom i cognoms
+Andreu Snijders Trullàs
+Adrián Fernández Beserán
 
 ## El formato WAVE
 
@@ -188,12 +190,150 @@ para que se realice el realce sintáctico en Python del mismo (no vale insertar 
 pantalla, debe hacerse en formato *markdown*).
 
 ##### Código de `estereo2mono()`
+```python
+def estereo2mono(ficEste, ficMono, canal=2):
+    """
+    Convierte un archivo WAVE estéreo a mono.
+    
+    Parámetros:
+    ficEste (str): Nombre del archivo WAVE estéreo de entrada.
+    ficMono (str): Nombre del archivo WAVE mono de salida.
+    canal (int): Canal a extraer: 0=izquierdo, 1=derecho, 2=semisuma, 3=semidiferencia.
+    """
+    params = leer_cabecera_wav(ficEste)
+    if params['canales'] != 2 or params['bits_per_sample'] != 16:
+        raise ValueError("El archivo de entrada debe ser un archivo WAVE estéreo con muestras de 16 bits.")
+    
+    with open(ficEste, 'rb') as infile:
+        infile.seek(44)  # Salta la cabecera
+        frames = infile.read(params['data_tamaño'])  # Lee los datos de audio
+        
+        # Determina la operación a realizar según el canal especificado
+        operaciones = {
+            0: lambda l, r: l,
+            1: lambda l, r: r,
+            2: lambda l, r: (l + r) // 2,
+            3: lambda l, r: (l - r) // 2
+        }
+        operacion = operaciones[canal]
+
+        # Calcula las muestras mono de acuerdo al canal especificado
+        out_frames = bytearray(
+            struct.pack('<h', operacion(left, right))
+            for left, right in (struct.unpack('<hh', frames[i:i+4]) for i in range(0, len(frames), 4))
+        )
+
+    escribir_cabecera_wav(ficMono, {'canales': 1, 'frecuencia': params['frecuencia'], 'bits_per_sample': 16}, len(out_frames))
+    
+    with open(ficMono, 'ab') as outfile:
+        outfile.write(out_frames)
+```
+<br>
 
 ##### Código de `mono2estereo()`
+```python
+def mono2estereo(ficIzq, ficDer, ficEste):
+    """
+    Combina dos archivos WAVE mono en un archivo WAVE estéreo.
+    
+    Parámetros:
+    ficIzq (str): Nombre del archivo WAVE mono del canal izquierdo.
+    ficDer (str): Nombre del archivo WAVE mono del canal derecho.
+    ficEste (str): Nombre del archivo WAVE estéreo de salida.
+    """
+    params_izq = leer_cabecera_wav(ficIzq)
+    params_der = leer_cabecera_wav(ficDer)
+
+    if params_izq['canales'] != 1 or params_izq['bits_per_sample'] != 16 or params_der['canales'] != 1 or params_der['bits_per_sample'] != 16 or params_izq['frecuencia'] != params_der['frecuencia'] or params_izq['data_tamaño'] != params_der['data_tamaño']:
+        raise ValueError("Los archivos de entrada deben ser archivos WAVE mono con los mismos parámetros.")
+    
+    with open(ficIzq, 'rb') as leftfile, open(ficDer, 'rb') as rightfile:
+        leftfile.seek(44)  # Salta la cabecera
+        rightfile.seek(44)  # Salta la cabecera
+        frames_left = leftfile.read(params_izq['data_tamaño'])
+        frames_right = rightfile.read(params_der['data_tamaño'])
+
+        # Combina las muestras de los canales izquierdo y derecho en estéreo
+        out_frames = bytearray(
+            frame_izq + frame_der
+            for frame_izq, frame_der in zip(
+                (frames_left[i:i+2] for i in range(0, len(frames_left), 2)),
+                (frames_right[i:i+2] for i in range(0, len(frames_right), 2))
+            )
+        )
+
+    escribir_cabecera_wav(ficEste, {'canales': 2, 'frecuencia': params_izq['frecuencia'], 'bits_per_sample': 16}, len(out_frames))
+    
+    with open(ficEste, 'ab') as outfile:
+        outfile.write(out_frames)
+```
+<br>
 
 ##### Código de `codEstereo()`
+```python
+def codEstereo(ficEste, ficCod):
+    """
+    Codifica un archivo WAVE estéreo en una señal de 32 bits compatible con mono.
+    
+    Parámetros:
+    ficEste (str): Nombre del archivo WAVE estéreo de entrada.
+    ficCod (str): Nombre del archivo WAVE codificado de salida.
+    """
+    params = leer_cabecera_wav(ficEste)
+    if params['canales'] != 2 or params['bits_per_sample'] != 16:
+        raise ValueError("El archivo de entrada debe ser un archivo WAVE estéreo con muestras de 16 bits.")
+    
+    with open(ficEste, 'rb') as infile:
+        infile.seek(44)  # Salta la cabecera
+        frames = infile.read(params['data_tamaño'])  # Lee los datos de audio
+
+        # Codifica las muestras estéreo en una señal de 32 bits
+        out_frames = bytearray(
+            struct.pack('<i', ((left + right) // 2 << 16) | ((left - right) // 2 & 0xFFFF))
+            for left, right in (struct.unpack('<hh', frames[i:i+4]) for i in range(0, len(frames), 4))
+        )
+
+    escribir_cabecera_wav(ficCod, {'canales': 1, 'frecuencia': params['frecuencia'], 'bits_per_sample': 32}, len(out_frames))
+    
+    with open(ficCod, 'ab') as outfile:
+        outfile.write(out_frames)
+```
+<br>
 
 ##### Código de `decEstereo()`
+```python
+def decEstereo(ficCod, ficEste):
+    """
+    Decodifica un archivo WAVE de 32 bits en un archivo WAVE estéreo.
+    
+    Parámetros:
+    ficCod (str): Nombre del archivo WAVE codificado de entrada.
+    ficEste (str): Nombre del archivo WAVE estéreo de salida.
+    """
+    params = leer_cabecera_wav(ficCod)
+    if params['canales'] != 1 or params['bits_per_sample'] != 32:
+        raise ValueError("El archivo de entrada debe ser un archivo WAVE mono con muestras de 32 bits.")
+    
+    with open(ficCod, 'rb') as infile:
+        infile.seek(44)  # Salta la cabecera
+        frames = infile.read(params['data_tamaño'])  # Lee los datos de audio
+
+        # Decodifica las muestras de 32 bits en estéreo utilizando comprensiones
+        out_frames = bytearray(
+            struct.pack(
+                '<hh', 
+                (semi_sum + (semi_diff - 0x10000 if semi_diff >= 0x8000 else semi_diff)), 
+                (semi_sum - (semi_diff - 0x10000 if semi_diff >= 0x8000 else semi_diff))
+            )
+            for encoded_sample in (struct.unpack('<i', frames[i:i+4])[0] for i in range(0, len(frames), 4))
+            for semi_sum, semi_diff in [(encoded_sample >> 16 & 0xFFFF, encoded_sample & 0xFFFF)]
+        )
+
+    escribir_cabecera_wav(ficEste, {'canales': 2, 'frecuencia': params['frecuencia'], 'bits_per_sample': 16}, len(out_frames))
+    
+    with open(ficEste, 'ab') as outfile:
+        outfile.write(out_frames)
+```
 
 #### Subida del resultado al repositorio GitHub y *pull-request*
 
