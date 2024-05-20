@@ -92,10 +92,11 @@ def estereo2mono(ficEste, ficMono, canal=2):
         operacion = operaciones[canal]
 
         # Calcula las muestras mono de acuerdo al canal especificado
-        out_frames = bytearray(
-            struct.pack('<h', operacion(left, right))
-            for left, right in (struct.unpack('<hh', frames[i:i+4]) for i in range(0, len(frames), 4))
-        )
+        out_frames = bytearray()
+        for i in range(0, len(frames), 4):
+            left, right = struct.unpack('<hh', frames[i:i+4])
+            mono_value = operacion(left, right)
+            out_frames.extend(struct.pack('<h', mono_value))
 
     escribir_cabecera_wav(ficMono, {'canales': 1, 'frecuencia': params['frecuencia'], 'bits_per_sample': 16}, len(out_frames))
     
@@ -124,13 +125,11 @@ def mono2estereo(ficIzq, ficDer, ficEste):
         frames_right = rightfile.read(params_der['data_tamaño'])
 
         # Combina las muestras de los canales izquierdo y derecho en estéreo
-        out_frames = bytearray(
-            frame_izq + frame_der
-            for frame_izq, frame_der in zip(
-                (frames_left[i:i+2] for i in range(0, len(frames_left), 2)),
-                (frames_right[i:i+2] for i in range(0, len(frames_right), 2))
-            )
-        )
+        out_frames = bytearray()
+        for i in range(0, len(frames_left), 2):
+            frame_izq = frames_left[i:i+2]
+            frame_der = frames_right[i:i+2]
+            out_frames.extend(frame_izq + frame_der)
 
     escribir_cabecera_wav(ficEste, {'canales': 2, 'frecuencia': params_izq['frecuencia'], 'bits_per_sample': 16}, len(out_frames))
     
@@ -154,10 +153,11 @@ def codEstereo(ficEste, ficCod):
         frames = infile.read(params['data_tamaño'])  # Lee los datos de audio
 
         # Codifica las muestras estéreo en una señal de 32 bits
-        out_frames = bytearray(
-            struct.pack('<i', ((left + right) // 2 << 16) | ((left - right) // 2 & 0xFFFF))
-            for left, right in (struct.unpack('<hh', frames[i:i+4]) for i in range(0, len(frames), 4))
-        )
+        out_frames = bytearray()
+        for i in range(0, len(frames), 4):
+            left, right = struct.unpack('<hh', frames[i:i+4])
+            encoded_sample = ((left + right) // 2 << 16) | ((left - right) // 2 & 0xFFFF)
+            out_frames.extend(struct.pack('<i', encoded_sample))
 
     escribir_cabecera_wav(ficCod, {'canales': 1, 'frecuencia': params['frecuencia'], 'bits_per_sample': 32}, len(out_frames))
     
@@ -172,24 +172,42 @@ def decEstereo(ficCod, ficEste):
     ficCod (str): Nombre del archivo WAVE codificado de entrada.
     ficEste (str): Nombre del archivo WAVE estéreo de salida.
     """
+    # Leer la cabecera del archivo codificado
     params = leer_cabecera_wav(ficCod)
+    
+    # Verificar que el archivo de entrada sea un archivo WAVE mono de 32 bits
     if params['canales'] != 1 or params['bits_per_sample'] != 32:
         raise ValueError("El archivo de entrada debe ser un archivo WAVE mono con muestras de 32 bits.")
     
     with open(ficCod, 'rb') as infile:
-        infile.seek(44)  # Salta la cabecera
-        frames = infile.read(params['data_tamaño'])  # Lee los datos de audio
-
-        # Decodifica las muestras de 32 bits en estéreo utilizando comprensiones
-        out_frames = bytearray(
-            struct.pack(
-                '<hh', 
-                (semi_sum + (semi_diff - 0x10000 if semi_diff >= 0x8000 else semi_diff)), 
-                (semi_sum - (semi_diff - 0x10000 if semi_diff >= 0x8000 else semi_diff))
-            )
-            for encoded_sample in (struct.unpack('<i', frames[i:i+4])[0] for i in range(0, len(frames), 4))
-            for semi_sum, semi_diff in [(encoded_sample >> 16 & 0xFFFF, encoded_sample & 0xFFFF)]
-        )
+        infile.seek(44)
+        frames = infile.read(params['data_tamaño'])
+        
+        if not frames:
+            raise ValueError("No se pudo leer datos del archivo de entrada.")
+        
+        out_frames = bytearray()
+        
+        # Procesar los datos de audio en bloques de 4 bytes
+        for i in range(0, len(frames), 4):
+            # Desempaquetar la muestra codificada de 32 bits
+            encoded_sample = struct.unpack('<i', frames[i:i+4])[0]
+            semi_sum = (encoded_sample >> 16) & 0xFFFF
+            semi_diff = encoded_sample & 0xFFFF
+            
+            # Ajustar la semidiferencia para valores negativos
+            if semi_diff >= 0x8000:
+                semi_diff -= 0x10000
+            
+            left = semi_sum + semi_diff
+            right = semi_sum - semi_diff
+            
+            # Ajustar los valores para que caigan dentro del rango permitido de 16 bits
+            left = max(-32768, min(32767, left))
+            right = max(-32768, min(32767, right))
+            
+            # Empaquetar las muestras izquierda y derecha y añadirlas al bytearray
+            out_frames.extend(struct.pack('<hh', left, right))
 
     escribir_cabecera_wav(ficEste, {'canales': 2, 'frecuencia': params['frecuencia'], 'bits_per_sample': 16}, len(out_frames))
     
